@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎮 WebRTC 화면 공유 시스템</title>
+    
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; background: #f5f5f5; color: #333; line-height: 1.6; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        header { text-align: center; margin-bottom: 30px; background: #fff; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        header h1 { color: #2c3e50; margin-bottom: 10px; }
+        header p { color: #7f8c8d; font-size: 16px; }
+        
+        .controls { background: #fff; padding: 25px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .section { margin-bottom: 25px; }
+        .section h3 { color: #2c3e50; margin-bottom: 15px; font-size: 18px; }
+        
+        .quality-options { margin-bottom: 15px; }
+        .quality-options label { font-weight: bold; margin-right: 10px; }
+        .quality-options select { padding: 8px; border: 1px solid #ddd; border-radius: 5px; font-size: 14px; }
+        
+        .control-buttons { display: flex; gap: 10px; }
+        .primary-btn { background: #3498db; color: white; border: none; padding: 12px 20px; border-radius: 5px; font-size: 16px; cursor: pointer; transition: background 0.3s; }
+        .primary-btn:hover { background: #2980b9; }
+        .stop-btn { background: #e74c3c; color: white; border: none; padding: 12px 20px; border-radius: 5px; font-size: 16px; cursor: pointer; }
+        .stop-btn:hover { background: #c0392b; }
+        .secondary-btn { background: #95a5a6; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer; }
+        .secondary-btn:hover { background: #7f8c8d; }
+        
+        .link-container { display: flex; gap: 10px; margin-bottom: 10px; }
+        .link-container input { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-size: 14px; }
+        
+        .status-section { background: #fff; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .status { padding: 15px; background: #f8f9fa; border-radius: 5px; font-size: 16px; text-align: center; font-weight: bold; }
+        
+        .hidden { display: none !important; }
+        .success-message { color: #27ae60; font-weight: bold; padding: 5px 0; }
+        
+        /* 시청자 모드 스타일 */
+        .viewer-only { min-height: 100vh; background: #000; }
+        .viewer-container { max-width: none; height: 100vh; display: flex; flex-direction: column; }
+        .viewer-controls-layout { flex: 1; display: flex; flex-direction: column; }
+        .volume-fullscreen-controls { display: flex; justify-content: space-between; align-items: center; padding: 10px; background: rgba(0,0,0,0.8); }
+        .volume-control { display: flex; align-items: center; gap: 10px; color: white; }
+        .volume-control input { width: 100px; }
+        .video-section { flex: 1; position: relative; }
+        #remoteVideo { width: 100%; height: 100%; object-fit: contain; background: #000; }
+        
+        .loading-overlay { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; color: white; z-index: 10; }
+        .loading-spinner { border: 3px solid #333; border-top: 3px solid #fff; border-radius: 50%; width: 40px; height: 40px; animation: spin 2s linear infinite; margin: 0 auto 15px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        .buffering-overlay { position: absolute; top: 20px; right: 20px; background: rgba(0,0,0,0.8); color: white; padding: 10px; border-radius: 5px; }
+        .buffering-spinner { width: 20px; height: 20px; border: 2px solid #333; border-top: 2px solid #fff; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 5px; }
+        
+        .compact-status { position: absolute; bottom: 10px; left: 10px; background: rgba(0,0,0,0.8); color: white; padding: 5px 10px; border-radius: 3px; font-size: 12px; }
+    </style>
+    
+    <!-- 구버전 브라우저 호환성을 위한 polyfill -->
+    <script>
+        // Promise polyfill for IE11
+        if (!window.Promise) {
+            document.write('<script src="https://cdn.jsdelivr.net/npm/es6-promise@4/dist/es6-promise.auto.min.js"><\/script>');
+        }
+        // Object.assign polyfill for IE
+        if (!Object.assign) {
+            Object.assign = function(target, varArgs) {
+                if (target == null) throw new TypeError('Cannot convert undefined or null to object');
+                var to = Object(target);
+                for (var index = 1; index < arguments.length; index++) {
+                    var nextSource = arguments[index];
+                    if (nextSource != null) {
+                        for (var nextKey in nextSource) {
+                            if (Object.prototype.hasOwnProperty.call(nextSource, nextKey)) {
+                                to[nextKey] = nextSource[nextKey];
+                            }
+                        }
+                    }
+                }
+                return to;
+            };
+        }
+    </script>
+    
+    <!-- WebRTC adapter for cross-browser compatibility -->
+    <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎮 WebRTC 화면 공유 시스템</h1>
+            <p>🎲 Tabletop Simulator 전용 화면 공유 - 저지연 & 고품질</p>
+        </header>
+
+        <!-- 호스트 화면 -->
+        <div id="hostControls">
+            <div class="controls">
+                <div class="section share-section">
+                    <h3>🖥️ 화면 공유</h3>
+                    
+                    <div class="quality-options">
+                        <label for="qualitySelect">📺 해상도:</label>
+                        <select id="qualitySelect">
+                            <option value="720p" selected>720p (1280x720)</option>
+                            <option value="1080p">1080p (1920x1080)</option>
+                        </select>
+                    </div>
+
+                    <div class="quality-options">
+                        <label for="framerateSelect">🎬 프레임레이트:</label>
+                        <select id="framerateSelect">
+                            <option value="15">15fps (저전력)</option>
+                            <option value="24">24fps (영화급)</option>
+                            <option value="30" selected>30fps (권장)</option>
+                            <option value="60">60fps (고품질)</option>
+                        </select>
+                    </div>
+
+                    <div class="quality-options">
+                        <label for="bitrateSelect">🌐 비트레이트:</label>
+                        <select id="bitrateSelect">
+                            <option value="500">500 Kbps (초저속 네트워크)</option>
+                            <option value="800">800 Kbps (저속 네트워크)</option>
+                            <option value="1200" selected>1.2 Mbps (권장)</option>
+                            <option value="2000">2.0 Mbps (고품질)</option>
+                            <option value="3000">3.0 Mbps (최고품질)</option>
+                            <option value="5000">5.0 Mbps (극고품질)</option>
+                        </select>
+                        <div style="font-size: 12px; color: #666; margin-top: 5px;">
+                            💡 권장: 1.2 Mbps (안정적) | 2.0 Mbps 이상은 빠른 인터넷 필요
+                        </div>
+                    </div>
+                    
+                    <div class="control-buttons">
+                        <button class="primary-btn" id="startButton">화면 공유 시작</button>
+                        <button class="stop-btn hidden" id="stopButton">공유 중지</button>
+                    </div>
+                </div>
+
+                <div class="section info-section" id="linkSection">
+                    <h3>🔗 참가자 링크</h3>
+                    <div class="link-container">
+                        <input type="text" id="viewerLink" readonly placeholder="화면 공유를 시작하면 링크가 생성됩니다">
+                        <button class="secondary-btn" id="copyLink">📋 복사</button>
+                    </div>
+                    <div id="linkSuccess" class="success-message hidden">
+                        ✅ 링크가 클립보드에 복사되었습니다!
+                    </div>
+                </div>
+            </div>
+
+            <div class="status-section">
+                <div class="status" id="hostStatus">화면 공유를 시작해주세요.</div>
+            </div>
+        </div>
+
+        <!-- 시청자 화면 -->
+        <div id="viewerControls" class="viewer-only hidden">
+            <div class="container viewer-container">
+                <div class="viewer-controls-layout">
+                    <div class="volume-fullscreen-controls">
+                        <div class="volume-control">
+                            <label for="volumeSlider">볼륨:</label>
+                            <input type="range" id="volumeSlider" min="0" max="100" value="50">
+                            <span id="volumeValue">50%</span>
+                            <button id="muteBtn" onclick="toggleMute()">🔊</button>
+                        </div>
+                        
+                        <div class="fullscreen-control">
+                            <button class="secondary-btn" id="fullscreenBtn" onclick="toggleFullscreen()">⛶ 전체화면</button>
+                        </div>
+                    </div>
+
+                    <div class="video-section">
+                        <div class="loading-overlay" id="loadingOverlay">
+                            <div class="loading-spinner"></div>
+                            <div class="loading-text">호스트 연결 중...</div>
+                            <div class="loading-bar">
+                                <div class="loading-progress" id="loadingProgress"></div>
+                            </div>
+                        </div>
+                        
+                        <div class="buffering-overlay hidden" id="bufferingOverlay">
+                            <div class="buffering-spinner"></div>
+                            <div class="buffering-text">버퍼링 중...</div>
+                        </div>
+                        
+                        <video id="remoteVideo" autoplay playsinline></video>
+                        <div class="status compact-status" id="viewerStatus">호스트의 화면 공유를 기다리는 중...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/js/main.js"></script>
+</body>
+</html> 

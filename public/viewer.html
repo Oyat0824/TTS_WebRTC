@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎮 테이블탑 시뮬레이터 시청</title>
+    <style>
+        * { 
+            margin: 0; 
+            padding: 0; 
+            box-sizing: border-box; 
+        }
+        
+        body { 
+            background: #000; 
+            overflow: hidden; 
+            font-family: Arial, sans-serif;
+        }
+        
+        #video-container { 
+            position: fixed; 
+            top: 0; 
+            left: 0; 
+            width: 100vw; 
+            height: 100vh; 
+            background: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        #remoteVideo { 
+            width: 100%; 
+            height: 100%; 
+            object-fit: contain;
+            background: #000;
+            
+            /* 테이블탑용 렌더링 최적화 */
+            transform: translateZ(0); /* 하드웨어 가속 */
+            -webkit-transform: translateZ(0);
+            will-change: transform; /* GPU 렌더링 힌트 */
+            image-rendering: optimizeSpeed; /* 빠른 렌더링 */
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: optimize-contrast;
+        }
+        
+        /* PIP 버튼 숨기기 */
+        #remoteVideo::-webkit-media-controls-picture-in-picture-button {
+            display: none !important;
+        }
+        
+        #remoteVideo::-webkit-media-controls-pip-button {
+            display: none !important;
+        }
+        
+        /* Firefox PIP 버튼 숨기기 */
+        #remoteVideo::-moz-media-controls-picture-in-picture {
+            display: none !important;
+        }
+        
+        /* 모든 PIP 관련 컨트롤 숨기기 */
+        video::-webkit-media-controls-picture-in-picture-button,
+        video::-webkit-media-controls-pip-button {
+            display: none !important;
+        }
+        
+        #loading-overlay {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #fff;
+            text-align: center;
+            z-index: 10;
+            background: rgba(0,0,0,0.8);
+            padding: 20px;
+            border-radius: 10px;
+            font-size: 18px;
+        }
+        
+        .spinner {
+            border: 3px solid #333;
+            border-top: 3px solid #fff;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 2s linear infinite;
+            margin: 0 auto 15px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .hidden { 
+            display: none !important; 
+        }
+    </style>
+</head>
+<body>
+    <!-- 전체화면 비디오 컨테이너 -->
+    <div id="video-container">
+        <video id="remoteVideo" autoplay playsinline controls disablepictureinpicture></video>
+    </div>
+    
+    <!-- 로딩 오버레이 -->
+    <div id="loading-overlay">
+        <div class="spinner"></div>
+        <div id="loading-text">🎮 테이블탑 시뮬레이터 연결 중...</div>
+        <div style="font-size: 14px; margin-top: 10px; opacity: 0.7;">호스트가 화면 공유를 시작했는지 확인하세요</div>
+    </div>
+
+    <script>
+        var socket;
+        var peerConnection;
+        var reconnectAttempts = 0;
+        var maxReconnectAttempts = 10;
+        
+        function updateLoadingText(text) {
+            var loadingText = document.getElementById('loading-text');
+            if (loadingText) loadingText.textContent = text;
+        }
+        
+        function hideLoading() {
+            var loadingOverlay = document.getElementById('loading-overlay');
+            if (loadingOverlay) loadingOverlay.classList.add('hidden');
+        }
+        
+        function showLoading(text) {
+            var loadingOverlay = document.getElementById('loading-overlay');
+            if (loadingOverlay) {
+                loadingOverlay.classList.remove('hidden');
+                updateLoadingText(text || '🎮 테이블탑 시뮬레이터 연결 중...');
+            }
+        }
+        
+        function startConnection() {
+            showLoading('🔌 서버 연결 중...');
+            
+            if (socket) socket.disconnect();
+            
+            socket = io();
+            
+            socket.on('connect', function() {
+                updateLoadingText('📝 시청자 등록 중...');
+                
+                socket.emit('register-viewer');
+                
+                setTimeout(function() {
+                    updateLoadingText('📡 호스트 대기 중...');
+                    socket.emit('request-stream');
+                }, 500);
+            });
+            
+            socket.on('disconnect', function() {
+                showLoading('❌ 서버 연결 끊김 - 자동 재연결 중...');
+                autoReconnect();
+            });
+            
+            socket.on('connect_error', function(error) {
+                showLoading('❌ 연결 실패 - 자동 재시도 중...');
+                autoReconnect();
+            });
+            
+            setupWebRTCHandlers();
+        }
+        
+        function autoReconnect() {
+            if (reconnectAttempts >= maxReconnectAttempts) {
+                showLoading('❌ 연결 실패: 호스트를 찾을 수 없습니다');
+                setTimeout(function() {
+                    reconnectAttempts = 0;
+                    startConnection();
+                }, 30000);
+                return;
+            }
+            
+            reconnectAttempts++;
+            showLoading('🔄 자동 재연결 중... (' + reconnectAttempts + '/' + maxReconnectAttempts + ')');
+            
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            
+            clearVideo();
+            
+            var delay = Math.min(reconnectAttempts * 1000, 10000);
+            setTimeout(function() {
+                if (socket && socket.connected) {
+                    socket.emit('register-viewer');
+                    
+                    setTimeout(function() {
+                        socket.emit('request-stream');
+                    }, 500);
+                } else {
+                    startConnection();
+                }
+            }, delay);
+        }
+        
+        function setupWebRTCHandlers() {
+            socket.on('offer', function(offer, hostId) {
+                updateLoadingText('🔧 WebRTC 연결 설정 중...');
+                reconnectAttempts = 0;
+                handleOffer(offer, hostId);
+            });
+            
+            socket.on('ice-candidate', function(candidate, hostId) {
+                handleIceCandidate(candidate);
+            });
+            
+            socket.on('host-disconnected', function() {
+                showLoading('📴 호스트가 연결을 종료했습니다 - 자동 재연결 중...');
+                clearVideo();
+                autoReconnect();
+            });
+            
+            socket.on('host-stopped-sharing', function() {
+                showLoading('⏹️ 호스트가 화면 공유를 중단했습니다 - 자동 재연결 중...');
+                clearVideo();
+                autoReconnect();
+            });
+        }
+        
+        function handleOffer(offer, hostId) {
+            try {
+                if (peerConnection) peerConnection.close();
+                
+                // 초저지연 PeerConnection 설정
+                peerConnection = new RTCPeerConnection({
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' },
+                        { urls: 'stun:stun2.l.google.com:19302' },
+                        { 
+                            urls: 'turn:openrelay.metered.ca:80',
+                            username: 'openrelayproject',
+                            credential: 'openrelayproject'
+                        }
+                    ],
+                    iceCandidatePoolSize: 3,
+                    bundlePolicy: 'max-bundle',
+                    rtcpMuxPolicy: 'require',
+                    encodedInsertableStreams: false
+                });
+                
+                peerConnection.oniceconnectionstatechange = function() {
+                    if (peerConnection.iceConnectionState === 'connected') {
+                        updateLoadingText('✅ 연결 완료! 비디오 로딩 중...');
+                    } else if (peerConnection.iceConnectionState === 'failed') {
+                        showLoading('❌ 연결 실패 - 자동 재시도 중...');
+                        autoReconnect();
+                    }
+                };
+                
+                peerConnection.onconnectionstatechange = function() {
+                    if (peerConnection.connectionState === 'connected') {
+                        updateLoadingText('🎬 비디오 스트림 수신 중...');
+                    } else if (peerConnection.connectionState === 'failed') {
+                        showLoading('❌ 연결 실패 - 자동 재시도 중...');
+                        autoReconnect();
+                    }
+                };
+                
+                peerConnection.onicecandidate = function(event) {
+                    if (event.candidate) {
+                        socket.emit('ice-candidate', event.candidate, socket.id);
+                    }
+                };
+                
+                peerConnection.ontrack = function(event) {
+                    if (event.streams[0]) {
+                        var video = document.getElementById('remoteVideo');
+                        
+                        video.srcObject = event.streams[0];
+                        
+                        // 초저지연 비디오 설정
+                        try {
+                            video.disablePictureInPicture = true;
+                            video.setAttribute('disablePictureInPicture', 'true');
+                            video.preload = 'none';
+                            video.setAttribute('webkit-playsinline', 'true');
+                            video.setAttribute('playsinline', 'true');
+                            video.style.imageRendering = 'optimizeSpeed';
+                            video.style.transform = 'translateZ(0)';
+                            video.style.backfaceVisibility = 'hidden';
+                            video.setAttribute('muted', 'false');
+                            
+                            // 추가 딜레이 최소화 설정
+                            video.currentTime = 0;
+                            video.defaultPlaybackRate = 1.0;
+                            video.playbackRate = 1.0;
+                        } catch (e) {
+                            // 무시
+                        }
+                        
+                        video.onloadeddata = function() {
+                            if (video.videoWidth <= 2 || video.videoHeight <= 2) {
+                                showLoading('⚠️ 호스트가 화면 공유를 시작하지 않았습니다 - 자동 재시도 중...');
+                                setTimeout(autoReconnect, 5000);
+                            } else {
+                                hideLoading();
+                            }
+                        };
+                        
+                        video.onerror = function(e) {
+                            showLoading('❌ 비디오 재생 오류 - 자동 재시도 중...');
+                            autoReconnect();
+                        };
+                    }
+                };
+                
+                // 초저지연 Answer 생성
+                peerConnection.setRemoteDescription(new RTCSessionDescription(offer)).then(function() {
+                    return peerConnection.createAnswer({
+                        offerToReceiveVideo: true,
+                        offerToReceiveAudio: true,
+                        voiceActivityDetection: false,
+                        iceRestart: false
+                    });
+                }).then(function(answer) {
+                    return peerConnection.setLocalDescription(answer);
+                }).then(function() {
+                    socket.emit('answer', peerConnection.localDescription, socket.id);
+                    updateLoadingText('📡 ICE 연결 시도 중...');
+                }).catch(function(error) {
+                    showLoading('❌ 연결 설정 실패 - 자동 재시도 중...');
+                    autoReconnect();
+                });
+                
+            } catch (e) {
+                showLoading('❌ WebRTC 설정 오류 - 자동 재시도 중...');
+                autoReconnect();
+            }
+        }
+        
+        function handleIceCandidate(candidate) {
+            if (peerConnection && peerConnection.remoteDescription) {
+                try {
+                    peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                } catch (e) {
+                    // 무시
+                }
+            }
+        }
+        
+        function clearVideo() {
+            var video = document.getElementById('remoteVideo');
+            if (video) {
+                video.srcObject = null;
+                video.pause();
+            }
+        }
+        
+        // 전역 오류 처리
+        window.onerror = function(message, source, line, col, error) {
+            showLoading('❌ 오류 발생 - 자동 재시도 중...');
+            autoReconnect();
+        };
+        
+        // 자동 시작
+        setTimeout(startConnection, 1000);
+    </script>
+    
+    <script src="/socket.io/socket.io.js"></script>
+</body>
+</html> 
